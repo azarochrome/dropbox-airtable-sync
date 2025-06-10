@@ -90,7 +90,6 @@ def upload_to_airtable(file_entry, category):
 
     # Optional Preview Link field (raw=1 conversion in Airtable formula)
     shared_link = f"https://www.dropbox.com/home{file_path}?raw=1"
-    record["fields"]["Preview Link"] = shared_link
 
     headers = {
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
