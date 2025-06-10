@@ -13,46 +13,32 @@ DROPBOX_CONTINUE_URL = "https://api.dropboxapi.com/2/files/list_folder/continue"
 DROPBOX_TEMP_LINK_URL = "https://api.dropboxapi.com/2/files/get_temporary_link"
 AIRTABLE_URL = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
 
-def list_dropbox_entries(path="", recursive=False):
-    headers = {
-        "Authorization": f"Bearer {DROPBOX_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "path": path,
-        "recursive": recursive,
-        "include_media_info": True
-    }
-    entries = []
-    print(f"\U0001f50d Listing Dropbox path: '{path or '/'}'...")
-    response = requests.post(DROPBOX_LIST_FOLDER_URL, headers=headers, json=payload)
-    if not response.ok:
-        print("❌ Dropbox error:", response.text)
-        response.raise_for_status()
-    data = response.json()
-    entries.extend(data.get("entries", []))
-    while data.get("has_more"):
-        cursor = data["cursor"]
-        response = requests.post(DROPBOX_CONTINUE_URL, headers=headers, json={"cursor": cursor})
-        if not response.ok:
-            print("❌ Pagination error:", response.text)
-            break
-        data = response.json()
-        entries.extend(data.get("entries", []))
-    return entries
 
 def get_temp_dropbox_link(path):
-    url = "https://api.dropboxapi.com/2/files/get_temporary_link"
     headers = {
         "Authorization": f"Bearer {DROPBOX_ACCESS_TOKEN}",
         "Content-Type": "application/json"
     }
-    response = requests.post(url, headers=headers, json={"path": path})
+    response = requests.post(DROPBOX_TEMP_LINK_URL, headers=headers, json={"path": path})
     if response.status_code == 200:
         return response.json().get("link")
     else:
         print("⚠️ Failed to get temporary link:", response.text)
         return None
+
+
+def record_exists(file_path):
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+    }
+    params = {
+        "filterByFormula": f"{{Dropbox Path}} = '{file_path}'"
+    }
+    response = requests.get(AIRTABLE_URL, headers=headers, params=params)
+    if response.status_code != 200:
+        print("⚠️ Airtable check failed:", response.text)
+        return False
+    return len(response.json().get("records", [])) > 0
 
 
 def upload_to_airtable(file_entry, category):
@@ -102,6 +88,36 @@ def upload_to_airtable(file_entry, category):
         print(f"✅ Uploaded: {file_name}")
         time.sleep(0.2)  # prevent rapid-fire uploads
 
+
+def list_dropbox_entries(path="", recursive=False):
+    headers = {
+        "Authorization": f"Bearer {DROPBOX_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "path": path,
+        "recursive": recursive,
+        "include_media_info": True
+    }
+    entries = []
+    print(f"🔍 Listing Dropbox path: '{path or '/'}'...")
+    response = requests.post(DROPBOX_LIST_FOLDER_URL, headers=headers, json=payload)
+    if not response.ok:
+        print("❌ Dropbox error:", response.text)
+        response.raise_for_status()
+    data = response.json()
+    entries.extend(data.get("entries", []))
+    while data.get("has_more"):
+        cursor = data["cursor"]
+        response = requests.post(DROPBOX_CONTINUE_URL, headers=headers, json={"cursor": cursor})
+        if not response.ok:
+            print("❌ Pagination error:", response.text)
+            break
+        data = response.json()
+        entries.extend(data.get("entries", []))
+    return entries
+
+
 def main():
     top_level = list_dropbox_entries(path="", recursive=False)
     folders = [f for f in top_level if f[".tag"] == "folder"]
@@ -115,6 +131,7 @@ def main():
         print(f"📦 Found {len(files)} files in '{folder_name}'")
         for file in files:
             upload_to_airtable(file, category=folder_name)
+
 
 if __name__ == "__main__":
     main()
