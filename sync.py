@@ -70,9 +70,11 @@ def upload_to_airtable(file_entry, category):
     file_path = file_entry["path_display"]
     file_type = file_name.split(".")[-1].lower()
     created_at = file_entry.get("client_modified", None)
+
     if record_exists(file_path):
         print(f"⏭️ Skipping already-synced file: {file_name}")
         return
+
     record = {
         "fields": {
             "File Name": file_name,
@@ -81,24 +83,25 @@ def upload_to_airtable(file_entry, category):
             "Category": category
         }
     }
+
     if created_at:
         record["fields"]["Date Created"] = created_at
 
-    # Generate preview link
-preview_url = get_temp_dropbox_link(file_entry["path_lower"])
-
-if preview_url:
-    record["fields"]["Media Preview"] = [{"url": preview_url}]
-    record["fields"]["Media Download"] = preview_url
-    record["fields"]["Media URL (optional)"] = preview_url
-
+    # ✅ Safe place for preview link logic
+    preview_url = get_temp_dropbox_link(file_entry["path_lower"])
+    if preview_url:
+        record["fields"]["Media Preview"] = [{"url": preview_url}]
+        record["fields"]["Media Download"] = preview_url
+        record["fields"]["Media URL (optional)"] = preview_url
 
     headers = {
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json",
     }
+
     print(f"📤 Uploading {file_name} to Airtable...")
     response = requests.post(AIRTABLE_URL, headers=headers, json=record)
+
     if response.status_code == 429:
         print("⏳ Rate limited. Retrying...")
         time.sleep(1)
