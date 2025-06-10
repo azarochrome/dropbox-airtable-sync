@@ -1,64 +1,84 @@
 import os
 import requests
+import json
 
-DROPBOX_TOKEN = os.environ["DROPBOX_TOKEN"]
-AIRTABLE_TOKEN = os.environ["AIRTABLE_TOKEN"]
-BASE_ID = os.environ["AIRTABLE_BASE_ID"]
-TABLE_NAME = os.environ["AIRTABLE_TABLE_NAME"]
+DROPBOX_ACCESS_TOKEN = os.getenv("DROPBOX_ACCESS_TOKEN")
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
 
-DROPBOX_FOLDER = "/"  # e.g. "/Shoots" or "/" for root
+DROPBOX_API_URL = "https://api.dropboxapi.com/2/files/list_folder"
+
 
 def list_dropbox_files():
-    res = requests.post(
-        "https://api.dropboxapi.com/2/files/list_folder",
-        headers={"Authorization": f"Bearer {DROPBOX_TOKEN}",
-                 "Content-Type": "application/json"},
-        json={"path": DROPBOX_FOLDER, "recursive": False}
-    )
-    return res.json().get("entries", [])
+    headers = {
+        "Authorization": f"Bearer {DROPBOX_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
 
-def get_share_link(path):
-    res = requests.post(
-        "https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings",
-        headers={"Authorization": f"Bearer {DROPBOX_TOKEN}",
-                 "Content-Type": "application/json"},
-        json={"path": path, "settings": {"requested_visibility": "public"}}
-    )
-    link = res.json().get("url", "")
-    return link.replace("?dl=0", "?raw=1")
+    payload = {
+        "path": "",
+        "recursive": True,
+        "include_media_info": True
+    }
 
-def detect_file_type(name):
-    ext = name.lower().split(".")[-1]
-    return "Image" if ext in ["jpg", "jpeg", "png", "gif"] else "Video" if ext in ["mp4", "mov"] else "Other"
+    print("🔍 Requesting Dropbox file list...")
+    response = requests.post(DROPBOX_API_URL, headers=headers, json=payload)
 
-def push_to_airtable(name, url, file_type, created_time):
-    data = {
+    print("📦 Dropbox Response Status Code:", response.status_code)
+
+    if not response.ok:
+        print("❌ Dropbox returned error response:")
+        print(response.text)
+        response.raise_for_status()
+
+    try:
+        json_data = response.json()
+        print(f"✅ Successfully parsed JSON. Found {len(json_data.get('entries', []))} files.")
+        return json_data.get("entries", [])
+    except json.JSONDecodeError:
+        print("❌ Failed to decode JSON from Dropbox response:")
+        print(response.text)
+        raise
+
+
+def upload_to_airtable(file_entry):
+    airtable_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
+
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    file_name = file_entry["name"]
+    file_path = file_entry["path_display"]
+    file_type = file_name.split(".")[-1]
+
+    record = {
         "fields": {
-            "File Name": name,
-            "Dropbox Share Link": url,
+            "File Name": file_name,
+            "Dropbox Path": file_path,
             "File Type": file_type,
-            "Date Created": created_time,
-            "Category": "Auto-sync"
         }
     }
-    r = requests.post(
-        f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME}",
-        headers={"Authorization": f"Bearer {AIRTABLE_TOKEN}",
-                 "Content-Type": "application/json"},
-        json=data
-    )
-    print(r.status_code, r.text)
+
+    print(f"📤 Uploading {file_name} to Airtable...")
+    response = requests.post(airtable_url, headers=headers, json=record)
+    print("📡 Airtable Response Status:", response.status_code)
+
+    if not response.ok:
+        print("❌ Airtable upload failed:", response.text)
+        response.raise_for_status()
+    else:
+        print(f"✅ Uploaded: {file_name}")
+
 
 def main():
-    for file in list_dropbox_files():
-        if file[".tag"] != "file":
-            continue
-        name = file["name"]
-        path = file["path_lower"]
-        date = file["client_modified"]
-        url = get_share_link(path)
-        file_type = detect_file_type(name)
-        push_to_airtable(name, url, file_type, date)
+    files = list_dropbox_files()
+    print(f"🔁 Uploading {len(files)} files to Airtable...")
+    for file in files:
+        upload_to_airtable(file)
+
 
 if __name__ == "__main__":
     main()
