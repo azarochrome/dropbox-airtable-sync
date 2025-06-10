@@ -88,11 +88,13 @@ def upload_to_airtable(file_entry, category):
         record["fields"]["Date Created"] = created_at
 
     # ✅ Safe place for preview link logic
-    preview_url = get_temp_dropbox_link(file_entry["path_lower"])
-    if preview_url:
-    record["fields"]["Media Preview"] = [{"url": preview_url}]
-    record["fields"]["Media Download"] = [{"url": preview_url}]
-    record["fields"]["Media URL (optional)"] = preview_url
+preview_url = get_temp_dropbox_link(file_entry["path_lower"])
+
+if preview_url:
+    record["fields"]["Media Preview"] = [{"url": preview_url}]   # For visible thumbnail in Airtable
+    record["fields"]["Media Download"] = [{"url": preview_url}]  # For downloading
+    record["fields"]["Media URL (optional)"] = preview_url        # Just a raw string
+
 
     headers = {
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
