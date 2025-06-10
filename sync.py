@@ -42,28 +42,18 @@ def list_dropbox_entries(path="", recursive=False):
     return entries
 
 def get_temp_dropbox_link(path):
+    url = "https://api.dropboxapi.com/2/files/get_temporary_link"
     headers = {
         "Authorization": f"Bearer {DROPBOX_ACCESS_TOKEN}",
         "Content-Type": "application/json"
     }
-    response = requests.post(DROPBOX_TEMP_LINK_URL, headers=headers, json={"path": path})
+    response = requests.post(url, headers=headers, json={"path": path})
     if response.status_code == 200:
         return response.json().get("link")
-    print(f"⚠️ Failed to get preview link for {path}")
-    return None
+    else:
+        print("⚠️ Failed to get temporary link:", response.text)
+        return None
 
-def record_exists(file_path):
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
-    }
-    params = {
-        "filterByFormula": f"{{Dropbox Path}} = '{file_path}'"
-    }
-    response = requests.get(AIRTABLE_URL, headers=headers, params=params)
-    if response.status_code != 200:
-        print("⚠️ Airtable check failed:", response.text)
-        return False
-    return len(response.json().get("records", [])) > 0
 
 def upload_to_airtable(file_entry, category):
     file_name = file_entry["name"]
@@ -75,26 +65,24 @@ def upload_to_airtable(file_entry, category):
         print(f"⏭️ Skipping already-synced file: {file_name}")
         return
 
+    preview_url = get_temp_dropbox_link(file_entry["path_lower"])
+
     record = {
         "fields": {
             "File Name": file_name,
             "Dropbox Path": file_path,
             "File Type": file_type,
-            "Category": category
+            "Category": category,
         }
     }
 
     if created_at:
         record["fields"]["Date Created"] = created_at
 
-    # ✅ Safe place for preview link logic
-preview_url = get_temp_dropbox_link(file_entry["path_lower"])
-
-if preview_url:
-    record["fields"]["Media Preview"] = [{"url": preview_url}]   # For visible thumbnail in Airtable
-    record["fields"]["Media Download"] = [{"url": preview_url}]  # For downloading
-    record["fields"]["Media URL (optional)"] = preview_url        # Just a raw string
-
+    if preview_url:
+        record["fields"]["Media Preview"] = [{"url": preview_url}]
+        record["fields"]["Media Download"] = [{"url": preview_url}]
+        record["fields"]["Media URL (optional)"] = preview_url
 
     headers = {
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
@@ -112,7 +100,7 @@ if preview_url:
         print("❌ Airtable error:", response.text)
     else:
         print(f"✅ Uploaded: {file_name}")
-        time.sleep(0.2)
+        time.sleep(0.2)  # prevent rapid-fire uploads
 
 def main():
     top_level = list_dropbox_entries(path="", recursive=False)
