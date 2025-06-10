@@ -1,16 +1,19 @@
 import os
+import time
 import requests
 import json
 
-DROPBOX_ACCESS_TOKEN = os.getenv("DROPBOX_TOKEN")  # 👈 matches your secret
-AIRTABLE_API_KEY = os.getenv("AIRTABLE_TOKEN")     # 👈 matches your secret
+DROPBOX_ACCESS_TOKEN = os.getenv("DROPBOX_TOKEN")
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_TOKEN")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME")
 
 DROPBOX_LIST_FOLDER_URL = "https://api.dropboxapi.com/2/files/list_folder"
+DROPBOX_CONTINUE_URL = "https://api.dropboxapi.com/2/files/list_folder/continue"
+AIRTABLE_URL = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
 
 
-def list_dropbox_entries(path=""):
+def list_dropbox_entries(path="", recursive=False):
     headers = {
         "Authorization": f"Bearer {DROPBOX_ACCESS_TOKEN}",
         "Content-Type": "application/json",
@@ -18,75 +21,112 @@ def list_dropbox_entries(path=""):
 
     payload = {
         "path": path,
-        "recursive": False,
+        "recursive": recursive,
         "include_media_info": True
     }
 
-    print(f"🔍 Listing Dropbox path: '{path or '/'}'")
-    response = requests.post(DROPBOX_LIST_FOLDER_URL, headers=headers, json=payload)
-    print("📦 Status Code:", response.status_code)
+    entries = []
 
+    print(f"🔍 Listing Dropbox path: '{path or '/'}'...")
+    response = requests.post(DROPBOX_LIST_FOLDER_URL, headers=headers, json=payload)
     if not response.ok:
-        print("❌ Dropbox Error:", response.text)
+        print("❌ Dropbox error:", response.text)
         response.raise_for_status()
 
-    try:
-        return response.json().get("entries", [])
-    except json.JSONDecodeError:
-        print("❌ JSON Decode Error from Dropbox:")
-        print(response.text)
-        raise
+    data = response.json()
+    entries.extend(data.get("entries", []))
+
+    # Handle pagination
+    while data.get("has_more"):
+        cursor = data["cursor"]
+        response = requests.post(DROPBOX_CONTINUE_URL, headers=headers, json={"cursor": cursor})
+        if not response.ok:
+            print("❌ Pagination error:", response.text)
+            break
+        data = response.json()
+        entries.extend(data.get("entries", []))
+
+    return entries
 
 
-def upload_to_airtable(file_entry, parent_folder):
-    airtable_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
-
+def record_exists(file_path):
     headers = {
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
-        "Content-Type": "application/json",
     }
 
+    params = {
+        "filterByFormula": f"{{Dropbox Path}} = '{file_path}'"
+    }
+
+    response = requests.get(AIRTABLE_URL, headers=headers, params=params)
+    if response.status_code != 200:
+        print("⚠️ Airtable check failed:", response.text)
+        return False
+
+    return len(response.json().get("records", [])) > 0
+
+
+def upload_to_airtable(file_entry, category):
     file_name = file_entry["name"]
     file_path = file_entry["path_display"]
     file_type = file_name.split(".")[-1].lower()
+    created_at = file_entry.get("client_modified", None)
+
+    if record_exists(file_path):
+        print(f"⏭️ Skipping already-synced file: {file_name}")
+        return
 
     record = {
         "fields": {
             "File Name": file_name,
             "Dropbox Path": file_path,
             "File Type": file_type,
-            "Category": parent_folder,  # Category from folder name
+            "Category": category,
         }
     }
 
-    print(f"📤 Uploading {file_name} from '{parent_folder}' to Airtable...")
-    response = requests.post(airtable_url, headers=headers, json=record)
+    if created_at:
+        record["fields"]["Date Created"] = created_at
 
-    if not response.ok:
-        print("❌ Airtable Error:", response.text)
-        response.raise_for_status()
+    # Optional Preview Link field (raw=1 conversion in Airtable formula)
+    shared_link = f"https://www.dropbox.com/home{file_path}?raw=1"
+    record["fields"]["Preview Link"] = shared_link
+
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    print(f"📤 Uploading {file_name} to Airtable...")
+    response = requests.post(AIRTABLE_URL, headers=headers, json=record)
+
+    if response.status_code == 429:
+        print("⏳ Rate limited. Retrying...")
+        time.sleep(1)
+        upload_to_airtable(file_entry, category)
+    elif not response.ok:
+        print("❌ Airtable error:", response.text)
     else:
         print(f"✅ Uploaded: {file_name}")
+        time.sleep(0.2)  # prevent rapid-fire uploads
 
 
 def main():
-    top_level_entries = list_dropbox_entries()
-
-    folders = [entry for entry in top_level_entries if entry[".tag"] == "folder"]
-
-    print(f"📁 Found {len(folders)} top-level folders.")
+    top_level = list_dropbox_entries(path="", recursive=False)
+    folders = [f for f in top_level if f[".tag"] == "folder"]
+    print(f"📁 Found {len(folders)} folders.")
 
     for folder in folders:
         folder_path = folder["path_display"]
         folder_name = folder["name"]
+        print(f"\n📂 Scanning '{folder_name}'...")
 
-        files = list_dropbox_entries(path=folder_path)
-        files = [f for f in files if f[".tag"] == "file"]
+        all_entries = list_dropbox_entries(path=folder_path, recursive=True)
+        files = [f for f in all_entries if f[".tag"] == "file"]
 
-        print(f"📂 Syncing {len(files)} files from folder '{folder_name}'...")
-
+        print(f"📦 Found {len(files)} files in '{folder_name}'")
         for file in files:
-            upload_to_airtable(file, parent_folder=folder_name)
+            upload_to_airtable(file, category=folder_name)
 
 
 if __name__ == "__main__":
